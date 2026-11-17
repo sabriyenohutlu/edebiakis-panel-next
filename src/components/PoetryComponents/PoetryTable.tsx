@@ -1,0 +1,194 @@
+// src/components/PoetryComponents/PoetryTable.tsx
+"use client";
+
+import { useMemo, useState } from "react";
+import Link from "next/link";
+import { MantineReactTable, useMantineReactTable, type MRT_ColumnDef } from "mantine-react-table";
+import { ActionIcon, Badge, Group, Text, Tooltip } from "@mantine/core";
+import {
+  IconArrowBackUp, IconCircleCheck, IconEye, IconPencil, IconPin, IconPinFilled, IconPlus, IconTrash,
+} from "@tabler/icons-react";
+import { Loader2 } from "lucide-react";
+import type { Timestamp } from "firebase/firestore";
+import { Button } from "@/components/ui/button";
+import { deletePost, setPostFeatured, setPostStatus } from "@/services/post.service";
+import { useDefinitionDocs } from "@/lib/content-utils";
+import { postStatusConfig, type Post, type PostStatus } from "@/types/post";
+import { POETRY_ROUTES } from "./PoetryForm/usePoetryForm";
+
+const formatDate = (t?: Timestamp | null) =>
+  t?.toDate ? t.toDate().toLocaleDateString("tr-TR", { day: "numeric", month: "short", year: "numeric" }) : "—";
+
+type Props = { posts: Post[]; loading: boolean; error: string };
+
+export default function PoetryTable({ posts, loading, error }: Props) {
+  const [actionError, setActionError] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const authors = useDefinitionDocs("authors");
+  const genres = useDefinitionDocs("genres");
+  const poetNames = useMemo(() => new Map(authors.map((a) => [a.id, String(a.fullName ?? "")])), [authors]);
+  const formNames = useMemo(() => new Map(genres.map((g) => [g.id, String(g.name ?? "")])), [genres]);
+
+  const run = async (id: string, action: () => Promise<void>) => {
+    try {
+      setBusyId(id);
+      setActionError("");
+      await action();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "İşlem başarısız");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleDelete = (post: Post) => {
+    if (!window.confirm(`"${post.title}" silinecek. Bu işlem geri alınamaz. Emin misiniz?`)) return;
+    run(post.id, () => deletePost(post));
+  };
+
+  const columns = useMemo<MRT_ColumnDef<Post>[]>(
+    () => [
+      {
+        accessorKey: "title",
+        header: "Şiir",
+        size: 260,
+        Cell: ({ row }) => (
+          <Link href={POETRY_ROUTES.detail(row.original.id)} style={{ minWidth: 0, display: "block" }}>
+            <Text size="sm" fw={500} lineClamp={1}>{row.original.title}</Text>
+            {row.original.excerpt && <Text size="xs" c="dimmed" lineClamp={1}>{row.original.excerpt}</Text>}
+          </Link>
+        ),
+      },
+      {
+        id: "poet",
+        header: "Şair",
+        size: 160,
+        accessorFn: (row) => (row.authorId ? poetNames.get(row.authorId) ?? "" : ""),
+        Cell: ({ cell }) => <Text size="sm" lineClamp={1}>{cell.getValue<string>() || "—"}</Text>,
+      },
+      {
+        id: "form",
+        header: "Nazım Şekli",
+        size: 120,
+        accessorFn: (row) => (row.formId ? formNames.get(row.formId) ?? "" : ""),
+        Cell: ({ cell }) => <Text size="xs" c="dimmed">{cell.getValue<string>() || "—"}</Text>,
+      },
+      {
+        id: "date",
+        header: "Tarih",
+        size: 110,
+        accessorFn: (row) => formatDate(row.publishedAt ?? row.createdAt),
+        Cell: ({ cell }) => <Text size="xs" c="dimmed">{cell.getValue<string>()}</Text>,
+      },
+      {
+        accessorKey: "status",
+        header: "Durum",
+        size: 110,
+        filterVariant: "select",
+        mantineFilterSelectProps: {
+          data: Object.entries(postStatusConfig).map(([value, c]) => ({ value, label: c.label })),
+        },
+        Cell: ({ cell }) => {
+          const cfg = postStatusConfig[cell.getValue<PostStatus>()];
+          return (
+            <Badge color={cfg?.mantineColor ?? "gray"} variant="light" size="sm" radius="xl">
+              {cfg?.label ?? cell.getValue<string>()}
+            </Badge>
+          );
+        },
+      },
+    ],
+    [poetNames, formNames],
+  );
+
+  const shownError = error || actionError;
+
+  const table = useMantineReactTable({
+    columns,
+    data: posts,
+    getRowId: (row) => row.id,
+    state: { showAlertBanner: !!shownError },
+    mantineToolbarAlertBannerProps: shownError ? { color: "red", children: shownError } : undefined,
+    enableColumnActions: false,
+    enableDensityToggle: false,
+    enableFullScreenToggle: false,
+    enableHiding: false,
+    initialState: { density: "xs", pagination: { pageSize: 10, pageIndex: 0 }, showGlobalFilter: true },
+    paginationDisplayMode: "pages",
+    positionGlobalFilter: "left",
+    mantineSearchTextInputProps: { placeholder: "Şiir veya şair ara...", style: { width: "260px" } },
+    mantinePaginationProps: { radius: "md", size: "sm" },
+    renderTopToolbarCustomActions: () => (
+      <Button size="sm" className="h-8 text-xs gap-1.5" asChild>
+        <Link href={POETRY_ROUTES.create}>
+          <IconPlus size={14} />
+          Şiir Ekle
+        </Link>
+      </Button>
+    ),
+    enableRowActions: true,
+    positionActionsColumn: "last",
+    displayColumnDefOptions: { "mrt-row-actions": { header: "İşlemler", size: 170 } },
+    renderRowActions: ({ row }) => {
+      const p = row.original;
+      const isBusy = busyId === p.id;
+      return (
+        <Group spacing={2} noWrap>
+          {p.status === "pending" && (
+            <Tooltip label="Onayla ve yayınla">
+              <ActionIcon variant="subtle" color="green" size="sm" loading={isBusy} onClick={() => run(p.id, () => setPostStatus(p, "published"))}>
+                <IconCircleCheck size={15} />
+              </ActionIcon>
+            </Tooltip>
+          )}
+          {p.status === "published" && (
+            <Tooltip label="Yayından kaldır">
+              <ActionIcon variant="subtle" color="orange" size="sm" loading={isBusy} onClick={() => run(p.id, () => setPostStatus(p, "draft"))}>
+                <IconArrowBackUp size={15} />
+              </ActionIcon>
+            </Tooltip>
+          )}
+          <Tooltip label={p.isFeatured ? "Öne çıkarmayı kaldır" : "Öne çıkar"}>
+            <ActionIcon
+              variant="subtle"
+              color={p.isFeatured ? "yellow" : "gray"}
+              size="sm"
+              disabled={isBusy}
+              onClick={() => run(p.id, () => setPostFeatured(p.id, !p.isFeatured))}
+            >
+              {p.isFeatured ? <IconPinFilled size={15} /> : <IconPin size={15} />}
+            </ActionIcon>
+          </Tooltip>
+          <Tooltip label="Detay">
+            <ActionIcon variant="subtle" color="gray" size="sm" component={Link} href={POETRY_ROUTES.detail(p.id)}>
+              <IconEye size={15} />
+            </ActionIcon>
+          </Tooltip>
+          <Tooltip label="Düzenle">
+            <ActionIcon variant="subtle" color="gray" size="sm" component={Link} href={POETRY_ROUTES.edit(p.id)}>
+              <IconPencil size={15} />
+            </ActionIcon>
+          </Tooltip>
+          <Tooltip label="Sil">
+            <ActionIcon variant="subtle" color="red" size="sm" disabled={isBusy} onClick={() => handleDelete(p)}>
+              <IconTrash size={15} />
+            </ActionIcon>
+          </Tooltip>
+        </Group>
+      );
+    },
+    mantineTableProps: { highlightOnHover: true, withColumnBorders: false, withBorder: false },
+    localization: { search: "Ara", rowsPerPage: "Sayfa başına satır", of: "/", noRecordsToDisplay: "Henüz şiir yok" },
+  });
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  return <MantineReactTable table={table} />;
+}
