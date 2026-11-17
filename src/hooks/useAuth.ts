@@ -9,7 +9,6 @@ import {
   updateProfile,
 } from "firebase/auth";
 import { FirebaseError } from "firebase/app";
-import { authService } from "@/apilib/services/authService";
 import { translateFirebaseError } from "@/utils/translateFirebaseError";
 import { auth } from "../../firebase";
 import { clearAuthCookie, setAuthCookie } from "@/lib/auth-cookie";
